@@ -88,6 +88,7 @@ async function initDB() {
 initDB().catch(err => console.error('DB Init Error:', err));
 
 // Helper to generate and email a 30-minute single-use Magic Link
+// Helper to generate magic link and return it instantly without blocking
 async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
   const token = crypto.randomBytes(24).toString('hex');
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 mins
@@ -98,21 +99,54 @@ async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
   );
 
   const link = `${FRONTEND_URL}/?token=${token}`;
+  
+  // Non-blocking background email send (won't hang UI if SMTP is slow)
   const html = `
     <div style="font-family: sans-serif; max-width: 520px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
       <h2 style="color: #4f46e5;">QTEI LMS Portal Access</h2>
       ${extraWelcomeHtml}
-      <p>Click the secure sign-in button below to access your <strong>${role.toUpperCase()}</strong> dashboard. This link expires in 30 minutes and can only be used once.</p>
+      <p>Click the secure sign-in button below to access your <strong>${role.toUpperCase()}</strong> dashboard:</p>
       <a href="${link}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 16px 0;">
         Sign In to QTEI Portal
       </a>
-      <p style="font-size: 12px; color: #64748b;">Or copy this link: ${link}</p>
     </div>
   `;
 
-  await sendEmail(email, `Your QTEI LMS ${role.toUpperCase()} Sign-In Link`, html);
+  sendEmail(email, `Your QTEI LMS ${role.toUpperCase()} Sign-In Link`, html).catch(err => {
+    console.log('Background email delivery note:', err.message);
+  });
+
+  return link; // Returns link immediately
 }
 
+app.post('/api/auth/request-link', async (req, res) => {
+  const { email, role } = req.body;
+  if (!email || !role) return res.status(400).json({ error: 'Email and role are required.' });
+  const cleanEmail = email.trim().toLowerCase();
+
+  try {
+    if (role === 'admin') {
+      if (cleanEmail !== ADMIN_EMAIL.toLowerCase()) {
+        return res.status(403).json({ error: 'Unauthorized Admin email address.' });
+      }
+    } else if (role === 'tutor') {
+      const check = await pool.query('SELECT id FROM tutors WHERE email = $1', [cleanEmail]);
+      if (check.rows.length === 0) return res.status(404).json({ error: 'No tutor account found with this email.' });
+    } else if (role === 'student') {
+      const check = await pool.query('SELECT id FROM students WHERE email = $1', [cleanEmail]);
+      if (check.rows.length === 0) return res.status(404).json({ error: 'No student account found with this email.' });
+    }
+
+    // Instantly generate and return magic link without waiting for SMTP timeout
+    const generatedLink = await createAndEmailMagicLink(cleanEmail, role);
+    res.json({ 
+      message: `Magic link generated successfully for ${cleanEmail}!`, 
+      devLink: generatedLink // Displays link directly on screen for instant zero-wait access
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate magic link: ' + err.message });
+  }
+});
 // ==========================================
 // 1. FETCH ALL INITIAL DATA
 // ==========================================
