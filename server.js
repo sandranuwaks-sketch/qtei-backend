@@ -121,15 +121,24 @@ async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
 
 app.post('/api/auth/request-link', async (req, res) => {
   const { email, role } = req.body;
-  if (!email || !role) return res.status(400).json({ error: 'Email and role are required.' });
-  const cleanEmail = email.trim().toLowerCase();
+  if (!role) return res.status(400).json({ error: 'Role is required.' });
 
   try {
     if (role === 'admin') {
-      if (cleanEmail !== ADMIN_EMAIL.toLowerCase()) {
-        return res.status(403).json({ error: 'Unauthorized Admin email address.' });
-      }
-    } else if (role === 'tutor') {
+      // Instant Admin Bypass: Log in immediately without email checking or tokens
+      return res.json({ 
+        user: { 
+          role: 'admin', 
+          email: ADMIN_EMAIL 
+        } 
+      });
+    }
+
+    // For tutors and students, keep the magic link flow
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail) return res.status(400).json({ error: 'Email is required.' });
+
+    if (role === 'tutor') {
       const check = await pool.query('SELECT id FROM tutors WHERE email = $1', [cleanEmail]);
       if (check.rows.length === 0) return res.status(404).json({ error: 'No tutor account found with this email.' });
     } else if (role === 'student') {
@@ -137,21 +146,16 @@ app.post('/api/auth/request-link', async (req, res) => {
       if (check.rows.length === 0) return res.status(404).json({ error: 'No student account found with this email.' });
     }
 
-    // Generate token and link instantly
     const token = crypto.randomBytes(24).toString('hex');
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
-
     await pool.query(
       'INSERT INTO magic_links (token, email, role, expires_at) VALUES ($1, $2, $3, $4)',
       [token, cleanEmail, role, expiresAt]
     );
 
-    const directLink = `https://qtei-lms.vercel.app/?token=${token}`;
-
-    // Return the link directly in JSON so you can click it instantly without waiting for email
     res.json({ 
       message: `Magic link generated successfully!`, 
-      devLink: directLink 
+      devLink: `https://qtei-lms.vercel.app/?token=${token}` 
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed: ' + err.message });
