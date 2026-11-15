@@ -238,39 +238,6 @@ app.post('/api/tutors', async (req, res) => {
   }
 });
 
-app.post('/api/students', async (req, res) => {
-  const { name, email, courseId } = req.body;
-  if (!name || !email || !courseId) {
-    return res.status(400).json({ error: 'Name, email, and an existing course are required.' });
-  }
-
-  const code = `QTEI-${Math.floor(10000 + Math.random() * 90000)}`;
-  try {
-    const courseRes = await pool.query('SELECT * FROM courses WHERE id = $1', [courseId]);
-    if (courseRes.rows.length === 0) return res.status(404).json({ error: 'Selected course does not exist.' });
-
-    const result = await pool.query(
-      'INSERT INTO students (name, email, code, course_id) VALUES ($1, $2, $3, $4) RETURNING *',
-      [name, email.toLowerCase(), code, courseId]
-    );
-
-    const welcomeHtml = `
-      <p>Welcome <strong>${name}</strong>! You have been admitted into <strong>${courseRes.rows[0].name} (${courseRes.rows[0].code})</strong>.</p>
-      <p>Your Student Access Code: <strong style="color:#4f46e5;">${code}</strong></p>
-    `;
-    await createAndEmailMagicLink(email, 'student', welcomeHtml);
-
-    res.json({
-      ...result.rows[0],
-      course_name: courseRes.rows[0].name,
-      course_code: courseRes.rows[0].code,
-      timetable: courseRes.rows[0].timetable
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // ==========================================
 // 3. PASSWORDLESS MAGIC LINK AUTHENTICATION
 // ==========================================
