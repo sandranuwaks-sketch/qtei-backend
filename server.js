@@ -137,14 +137,24 @@ app.post('/api/auth/request-link', async (req, res) => {
       if (check.rows.length === 0) return res.status(404).json({ error: 'No student account found with this email.' });
     }
 
-    // Instantly generate and return magic link without waiting for SMTP timeout
-    const generatedLink = await createAndEmailMagicLink(cleanEmail, role);
+    // Generate token and link instantly
+    const token = crypto.randomBytes(24).toString('hex');
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+    await pool.query(
+      'INSERT INTO magic_links (token, email, role, expires_at) VALUES ($1, $2, $3, $4)',
+      [token, cleanEmail, role, expiresAt]
+    );
+
+    const directLink = `https://qtei-lms.vercel.app/?token=${token}`;
+
+    // Return the link directly in JSON so you can click it instantly without waiting for email
     res.json({ 
-      message: `Magic link generated successfully for ${cleanEmail}!`, 
-      devLink: generatedLink // Displays link directly on screen for instant zero-wait access
+      message: `Magic link generated successfully!`, 
+      devLink: directLink 
     });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to generate magic link: ' + err.message });
+    res.status(500).json({ error: 'Failed: ' + err.message });
   }
 });
 // ==========================================
