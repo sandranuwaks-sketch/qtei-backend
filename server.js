@@ -12,7 +12,7 @@ app.use(express.json());
 const ADMIN_EMAIL = 'sandranuwaks@gmail.com';
 const FRONTEND_URL = 'https://qtei-lms.vercel.app';
 
-// PostgreSQL Connection (uses Render's DATABASE_URL)
+// PostgreSQL Connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
@@ -50,7 +50,6 @@ async function initDB() {
       code TEXT UNIQUE NOT NULL,
       timetable TEXT DEFAULT 'Mon & Wed: 10:00 AM - 12:00 PM WAT'
     );
-
     CREATE TABLE IF NOT EXISTS tutors (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
@@ -58,7 +57,6 @@ async function initDB() {
       code TEXT UNIQUE NOT NULL,
       course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL
     );
-
     CREATE TABLE IF NOT EXISTS students (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
@@ -68,14 +66,12 @@ async function initDB() {
       bio TEXT DEFAULT '',
       phone TEXT DEFAULT ''
     );
-
     CREATE TABLE IF NOT EXISTS magic_links (
       token TEXT PRIMARY KEY,
       email TEXT NOT NULL,
       role TEXT NOT NULL,
       expires_at TIMESTAMP NOT NULL
     );
-
     CREATE TABLE IF NOT EXISTS timetable_requests (
       id SERIAL PRIMARY KEY,
       course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
@@ -87,11 +83,10 @@ async function initDB() {
 }
 initDB().catch(err => console.error('DB Init Error:', err));
 
-// Helper to generate and email a 30-minute single-use Magic Link
-// Helper to generate magic link and return it instantly without blocking
+// Helper for magic link generation
 async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
   const token = crypto.randomBytes(24).toString('hex');
-  const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 mins
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
   await pool.query(
     'INSERT INTO magic_links (token, email, role, expires_at) VALUES ($1, $2, $3, $4)',
@@ -100,7 +95,6 @@ async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
 
   const link = `${FRONTEND_URL}/?token=${token}`;
   
-  // Non-blocking background email send (won't hang UI if SMTP is slow)
   const html = `
     <div style="font-family: sans-serif; max-width: 520px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
       <h2 style="color: #4f46e5;">QTEI LMS Portal Access</h2>
@@ -116,73 +110,29 @@ async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
     console.log('Background email delivery note:', err.message);
   });
 
-  return link; // Returns link immediately
+  return link;
 }
 
-// ==========================================
-// 3. PASSWORDLESS MAGIC LINK AUTHENTICATION
-// ==========================================
-app.post('/api/auth/request-link', async (req, res) => {
-  const { email, role } = req.body;
-  if (!role) return res.status(400).json({ error: 'Role is required.' });
-
-  try {
-    if (role === 'admin') {
-      // Instant Admin Bypass: Log in immediately without email checking or tokens
-      return res.json({ 
-        user: { 
-          role: 'admin', 
-          email: ADMIN_EMAIL 
-        } 
-      });
-    }
-
-    // For tutors and students, keep the magic link flow
-    const cleanEmail = (email || '').trim().toLowerCase();
-    if (!cleanEmail) return res.status(400).json({ error: 'Email is required.' });
-
-    if (role === 'tutor') {
-      const check = await pool.query('SELECT id FROM tutors WHERE email = $1', [cleanEmail]);
-      if (check.rows.length === 0) return res.status(404).json({ error: 'No tutor account found with this email.' });
-    } else if (role === 'student') {
-      const check = await pool.query('SELECT id FROM students WHERE email = $1', [cleanEmail]);
-      if (check.rows.length === 0) return res.status(404).json({ error: 'No student account found with this email.' });
-    }
-
-    const token = crypto.randomBytes(24).toString('hex');
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
-    await pool.query(
-      'INSERT INTO magic_links (token, email, role, expires_at) VALUES ($1, $2, $3, $4)',
-      [token, cleanEmail, role, expiresAt]
-    );
-
-    res.json({ 
-      message: `Magic link generated successfully!`, 
-      devLink: `https://qtei-lms.vercel.app/?token=${token}` 
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed: ' + err.message });
-  }
-});
-// ==========================================
 // 1. FETCH ALL INITIAL DATA
-// ==========================================
 app.get('/api/data', async (req, res) => {
   try {
     const courses = await pool.query('SELECT * FROM courses ORDER BY id ASC');
     const tutors = await pool.query(`
       SELECT t.*, c.name AS course_name, c.code AS course_code 
-      FROM tutors t LEFT JOIN courses c ON t.course_id = c.id ORDER BY t.id ASC
+      FROM tutors t LEFT JOIN courses c ON t.course_id = c.id 
+      ORDER BY t.id ASC
     `);
     const students = await pool.query(`
       SELECT s.*, c.name AS course_name, c.code AS course_code, c.timetable 
-      FROM students s LEFT JOIN courses c ON s.course_id = c.id ORDER BY s.id ASC
+      FROM students s LEFT JOIN courses c ON s.course_id = c.id 
+      ORDER BY s.id ASC
     `);
     const requests = await pool.query(`
       SELECT r.*, c.name AS course_name, c.code AS course_code 
-      FROM timetable_requests r JOIN courses c ON r.course_id = c.id WHERE r.status = 'pending' ORDER BY r.id DESC
+      FROM timetable_requests r JOIN courses c ON r.course_id = c.id 
+      WHERE r.status = 'pending' 
+      ORDER BY r.id DESC
     `);
-
     res.json({
       courses: courses.rows,
       tutors: tutors.rows,
@@ -194,13 +144,10 @@ app.get('/api/data', async (req, res) => {
   }
 });
 
-// ==========================================
-// 2. ADMIN: COURSE-FIRST CREATION FLOW
-// ==========================================
+// 2. COURSES & TUTORS & STUDENTS CREATION
 app.post('/api/courses', async (req, res) => {
   const { name, timetable } = req.body;
   if (!name) return res.status(400).json({ error: 'Course name is required' });
-
   const code = `CRS-${name.replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
   try {
     const result = await pool.query(
@@ -218,7 +165,6 @@ app.post('/api/tutors', async (req, res) => {
   if (!name || !email || !courseId) {
     return res.status(400).json({ error: 'Name, email, and an existing course are required.' });
   }
-
   const code = `TUT-${Math.floor(1000 + Math.random() * 9000)}`;
   try {
     const courseRes = await pool.query('SELECT * FROM courses WHERE id = $1', [courseId]);
@@ -229,7 +175,8 @@ app.post('/api/tutors', async (req, res) => {
       [name, email.toLowerCase(), code, courseId]
     );
 
-    // Skip blocking email send to prevent Render SMTP timeout; return success instantly
+    createAndEmailMagicLink(email.toLowerCase(), 'tutor', `<p>You have been assigned as an instructor. Your access code is <strong>${code}</strong>.</p>`).catch(() => {});
+
     res.json({ 
       ...result.rows[0], 
       course_name: courseRes.rows[0].name, 
@@ -241,65 +188,79 @@ app.post('/api/tutors', async (req, res) => {
   }
 });
 
-// ==========================================
-// 3. PASSWORDLESS MAGIC LINK AUTHENTICATION
-// ==========================================
+app.post('/api/students', async (req, res) => {
+  const { name, email, courseId } = req.body;
+  if (!name || !email || !courseId) {
+    return res.status(400).json({ error: 'Name, email, and course are required.' });
+  }
+  const code = `QTEI-${Math.floor(10000 + Math.random() * 90000)}`;
+  try {
+    const courseRes = await pool.query('SELECT * FROM courses WHERE id = $1', [courseId]);
+    if (courseRes.rows.length === 0) return res.status(404).json({ error: 'Course not found.' });
+
+    const result = await pool.query(
+      'INSERT INTO students (name, email, code, course_id) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, email.toLowerCase(), code, courseId]
+    );
+
+    res.json({
+      ...result.rows[0],
+      course_name: courseRes.rows[0].name,
+      course_code: courseRes.rows[0].code
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. AUTHENTICATION ROUTES
 app.post('/api/auth/request-link', async (req, res) => {
   const { email, role } = req.body;
-  if (!email || !role) return res.status(400).json({ error: 'Email and role are required.' });
-  const cleanEmail = email.trim().toLowerCase();
+  if (!role) return res.status(400).json({ error: 'Role is required.' });
 
   try {
     if (role === 'admin') {
-      if (cleanEmail !== ADMIN_EMAIL.toLowerCase()) {
-        return res.status(403).json({ error: 'Unauthorized Admin email address.' });
-      }
-    } else if (role === 'tutor') {
+      return res.json({ user: { role: 'admin', email: ADMIN_EMAIL } });
+    }
+
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail) return res.status(400).json({ error: 'Email is required.' });
+
+    if (role === 'tutor') {
       const check = await pool.query('SELECT id FROM tutors WHERE email = $1', [cleanEmail]);
       if (check.rows.length === 0) return res.status(404).json({ error: 'No tutor account found with this email.' });
     } else if (role === 'student') {
       const check = await pool.query('SELECT id FROM students WHERE email = $1', [cleanEmail]);
       if (check.rows.length === 0) return res.status(404).json({ error: 'No student account found with this email.' });
-    } else {
-      return res.status(400).json({ error: 'Invalid role specified.' });
     }
 
-    await createAndEmailMagicLink(cleanEmail, role);
-    res.json({ message: `Magic sign-in link sent to ${cleanEmail}! Check your inbox.` });
+    const devLink = await createAndEmailMagicLink(cleanEmail, role);
+    res.json({ message: `Magic link generated successfully!`, devLink });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to send magic link: ' + err.message });
+    res.status(500).json({ error: 'Failed: ' + err.message });
   }
 });
 
 app.post('/api/auth/verify-token', async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'Token is required.' });
-
   try {
     const linkRes = await pool.query('SELECT * FROM magic_links WHERE token = $1', [token]);
     if (linkRes.rows.length === 0) return res.status(401).json({ error: 'Invalid or already used sign-in link.' });
-
+    
     const record = linkRes.rows[0];
-    // Burn token immediately (single-use)
     await pool.query('DELETE FROM magic_links WHERE token = $1', [token]);
-
+    
     if (new Date(record.expires_at) < new Date()) {
-      return res.status(401).json({ error: 'Sign-in link has expired. Please request a new one.' });
+      return res.status(401).json({ error: 'Sign-in link has expired.' });
     }
 
     let profile = { email: record.email, role: record.role };
-
     if (record.role === 'tutor') {
-      const tRes = await pool.query(
-        'SELECT t.*, c.name AS course_name, c.code AS course_code, c.timetable FROM tutors t LEFT JOIN courses c ON t.course_id = c.id WHERE t.email = $1',
-        [record.email]
-      );
+      const tRes = await pool.query('SELECT t.*, c.name AS course_name, c.code AS course_code, c.timetable FROM tutors t LEFT JOIN courses c ON t.course_id = c.id WHERE t.email = $1', [record.email]);
       profile = { ...profile, ...tRes.rows[0] };
     } else if (record.role === 'student') {
-      const sRes = await pool.query(
-        'SELECT s.*, c.name AS course_name, c.code AS course_code, c.timetable FROM students s LEFT JOIN courses c ON s.course_id = c.id WHERE s.email = $1',
-        [record.email]
-      );
+      const sRes = await pool.query('SELECT s.*, c.name AS course_name, c.code AS course_code, c.timetable FROM students s LEFT JOIN courses c ON s.course_id = c.id WHERE s.email = $1', [record.email]);
       profile = { ...profile, ...sRes.rows[0] };
     }
 
@@ -309,28 +270,19 @@ app.post('/api/auth/verify-token', async (req, res) => {
   }
 });
 
-// Direct Code Sign-In option for Students (first-time entry with emailed code)
 app.post('/api/auth/code-login', async (req, res) => {
   const { code } = req.body;
   if (!code) return res.status(400).json({ error: 'Access code is required.' });
-
   try {
-    const sRes = await pool.query(
-      'SELECT s.*, c.name AS course_name, c.code AS course_code, c.timetable FROM students s LEFT JOIN courses c ON s.course_id = c.id WHERE UPPER(s.code) = $1',
-      [code.trim().toUpperCase()]
-    );
+    const sRes = await pool.query('SELECT s.*, c.name AS course_name, c.code AS course_code, c.timetable FROM students s LEFT JOIN courses c ON s.course_id = c.id WHERE UPPER(s.code) = $1', [code.trim().toUpperCase()]);
     if (sRes.rows.length === 0) return res.status(401).json({ error: 'Invalid Student Access Code.' });
-
     res.json({ user: { ...sRes.rows[0], role: 'student' } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ==========================================
-// 4. STUDENT PROFILE & TIMETABLE SIGN-OFFS
-// ==========================================
-// Students can ONLY edit bio and phone; name, email, course, and timetable remain locked
+// 4. STUDENT PROFILE & TIMETABLE
 app.put('/api/students/:id/profile', async (req, res) => {
   const { bio, phone } = req.body;
   try {
@@ -344,7 +296,6 @@ app.put('/api/students/:id/profile', async (req, res) => {
   }
 });
 
-// Tutor proposes timetable edit -> goes to Admin Sign-Off queue
 app.post('/api/timetable/propose', async (req, res) => {
   const { courseId, tutorName, proposedTimetable } = req.body;
   try {
@@ -358,17 +309,16 @@ app.post('/api/timetable/propose', async (req, res) => {
   }
 });
 
-// Admin approves timetable edit -> updates master course timetable (syncs to Tutor & Student dashboards)
 app.post('/api/timetable/approve/:requestId', async (req, res) => {
   try {
     const reqRes = await pool.query('SELECT * FROM timetable_requests WHERE id = $1', [req.params.requestId]);
     if (reqRes.rows.length === 0) return res.status(404).json({ error: 'Request not found.' });
-
+    
     const request = reqRes.rows[0];
     await pool.query('UPDATE courses SET timetable = $1 WHERE id = $2', [request.proposed_timetable, request.course_id]);
     await pool.query("UPDATE timetable_requests SET status = 'approved' WHERE id = $1", [request.id]);
-
-    res.json({ message: 'Timetable updated and synced across Tutor and Student dashboards!' });
+    
+    res.json({ message: 'Timetable updated successfully!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
