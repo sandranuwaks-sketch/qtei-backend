@@ -119,6 +119,9 @@ async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
   return link; // Returns link immediately
 }
 
+// ==========================================
+// 3. PASSWORDLESS MAGIC LINK AUTHENTICATION
+// ==========================================
 app.post('/api/auth/request-link', async (req, res) => {
   const { email, role } = req.body;
   if (!role) return res.status(400).json({ error: 'Role is required.' });
