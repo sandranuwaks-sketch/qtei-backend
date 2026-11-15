@@ -226,13 +226,13 @@ app.post('/api/tutors', async (req, res) => {
       [name, email.toLowerCase(), code, courseId]
     );
 
-    const welcomeHtml = `
-      <p>Hello <strong>${name}</strong>, you have been assigned as an Instructor for <strong>${courseRes.rows[0].name} (${courseRes.rows[0].code})</strong>.</p>
-      <p>Your Tutor Access Code: <strong style="color:#4f46e5;">${code}</strong></p>
-    `;
-    await createAndEmailMagicLink(email, 'tutor', welcomeHtml);
-
-    res.json({ ...result.rows[0], course_name: courseRes.rows[0].name, course_code: courseRes.rows[0].code });
+    // Skip blocking email send to prevent Render SMTP timeout; return success instantly
+    res.json({ 
+      ...result.rows[0], 
+      course_name: courseRes.rows[0].name, 
+      course_code: courseRes.rows[0].code,
+      tempCode: code 
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
