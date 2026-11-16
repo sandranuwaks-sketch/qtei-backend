@@ -181,6 +181,77 @@ app.post('/api/students', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// ================= 1. NEW APPLICATION & REQUEST ENDPOINTS =================
+
+// Auto-create application tables in initDB() if not already present
+// (Add these inside your initDB function)
+/*
+    CREATE TABLE IF NOT EXISTS teacher_applications (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      expertise TEXT NOT NULL,
+      bio TEXT NOT NULL,
+      status TEXT DEFAULT 'pending'
+    );
+    CREATE TABLE IF NOT EXISTS student_applications (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      track TEXT NOT NULL,
+      motivation TEXT NOT NULL,
+      status TEXT DEFAULT 'pending'
+    );
+    CREATE TABLE IF NOT EXISTS course_requests (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      requested_by TEXT NOT NULL,
+      status TEXT DEFAULT 'pending'
+    );
+*/
+
+app.post('/api/apply/teach', async (req, res) => {
+  const { name, email, expertise, bio } = req.body;
+  if (!name || !email || !expertise) return res.status(400).json({ error: 'Required fields missing.' });
+  try {
+    const result = await pool.query(
+      'INSERT INTO teacher_applications (name, email, expertise, bio) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, email.toLowerCase(), expertise, bio || '']
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/apply/learn', async (req, res) => {
+  const { name, email, track, motivation } = req.body;
+  if (!name || !email || !track) return res.status(400).json({ error: 'Required fields missing.' });
+  try {
+    const result = await pool.query(
+      'INSERT INTO student_applications (name, email, track, motivation) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, email.toLowerCase(), track, motivation || '']
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/request-course', async (req, res) => {
+  const { title, description, requestedBy } = req.body;
+  if (!title || !description) return res.status(400).json({ error: 'Title and description required.' });
+  try {
+    const result = await pool.query(
+      'INSERT INTO course_requests (title, description, requested_by) VALUES ($1, $2, $3) RETURNING *',
+      [title, description, requestedBy || 'Anonymous']
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.post('/api/auth/request-link', async (req, res) => {
   const { email, role } = req.body;
