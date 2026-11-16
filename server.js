@@ -291,7 +291,7 @@ app.post('/api/auth/verify-token', async (req, res) => {
     if (linkRes.rows.length === 0) return res.status(401).json({ error: 'Invalid or expired link.' });
     const record = linkRes.rows[0];
     await pool.query('DELETE FROM magic_links WHERE token = $1', [token]);
-    
+
     let profile = { email: record.email, role: record.role };
     if (record.role === 'tutor') {
       const tRes = await pool.query('SELECT t.*, c.name AS course_name, c.code AS course_code, c.timetable FROM tutors t LEFT JOIN courses c ON t.course_id = c.id WHERE t.email = $1', [record.email]);
