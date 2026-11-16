@@ -129,6 +129,19 @@ app.get('/api/data', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+const teacherApps = await pool.query("SELECT * FROM teacher_applications WHERE status = 'pending' ORDER BY id DESC");
+    const studentApps = await pool.query("SELECT * FROM student_applications WHERE status = 'pending' ORDER BY id DESC");
+    const courseReqs = await pool.query("SELECT * FROM course_requests WHERE status = 'pending' ORDER BY id DESC");
+
+    res.json({
+      courses: courses.rows,
+      tutors: tutors.rows,
+      students: students.rows,
+      timetableRequests: requests.rows,
+      teacherApps: teacherApps.rows,
+      studentApps: studentApps.rows,
+      courseReqs: courseReqs.rows
+    });
 
 app.post('/api/courses', async (req, res) => {
   const { name, timetable } = req.body;
