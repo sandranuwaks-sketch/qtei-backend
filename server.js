@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
 require('dotenv').config();
 
@@ -18,31 +17,35 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
-// Nodemailer Transporter via Gmail App Password (Explicit Port 465 SSL)
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
-
+// Send Email via Resend HTTP API (Bypasses Render SMTP port blocks)
 async function sendEmail(to, subject, html) {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.warn('⚠️ EMAIL_USER or EMAIL_PASS missing in Render Environment Variables.');
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.warn('⚠️ RESEND_API_KEY missing in Render Environment Variables.');
     return false;
   }
   try {
-    const info = await transporter.sendMail({
-      from: `"QTEI LMS Portal" <${process.env.EMAIL_USER}>`,
-      to,
-      subject,
-      html
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        from: 'QTEI LMS Portal <onboarding@resend.dev>',
+        to: [to],
+        subject,
+        html
+      })
     });
-    console.log('✅ Email sent:', info.messageId);
-    return true;
+    const data = await res.json();
+    if (res.ok) {
+      console.log('✅ Email sent via Resend:', data.id);
+      return true;
+    } else {
+      console.error('❌ Resend API Error:', data);
+      return false;
+    }
   } catch (err) {
     console.error('❌ Email delivery failed:', err.message);
     return false;
@@ -190,7 +193,7 @@ app.post('/api/apply/teach', async (req, res) => {
       'INSERT INTO teacher_applications (name, email, expertise, bio) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, email.toLowerCase(), expertise, bio || '']
     );
-    await sendEmail(
+    sendEmail(
       email.toLowerCase(),
       'QTEI Instructor Application Received',
       `<p>Hi ${name},</p><p>Thank you for applying to teach <strong>${expertise}</strong> with QTEI. Our team will review your application shortly.</p>`
@@ -209,7 +212,7 @@ app.post('/api/apply/learn', async (req, res) => {
       'INSERT INTO student_applications (name, email, track, motivation) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, email.toLowerCase(), track, motivation || '']
     );
-    await sendEmail(
+    sendEmail(
       email.toLowerCase(),
       'QTEI Cohort Application Received',
       `<p>Hi ${name},</p><p>We have received your application for the <strong>${track}</strong> track at QTEI. You will receive your admission code once approved.</p>`
