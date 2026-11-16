@@ -12,11 +12,13 @@ app.use(express.json());
 const ADMIN_EMAIL = 'sandranuwaks@gmail.com';
 const FRONTEND_URL = 'https://qtei-lms.vercel.app';
 
+// PostgreSQL Connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
+// Free Nodemailer Transporter via Gmail App Password
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -27,54 +29,87 @@ const transporter = nodemailer.createTransport({
 
 async function sendEmail(to, subject, html) {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) return;
-  await transporter.sendMail({
-    from: `"QTEI LMS Portal" <${process.env.EMAIL_USER}>`,
-    to,
-    subject,
-    html
-  });
+  try {
+    await transporter.sendMail({
+      from: `"QTEI LMS Portal" <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      html
+    });
+  } catch (err) {
+    console.log('Email delivery note:', err.message);
+  }
 }
 
+// Auto-create database tables safely
 async function initDB() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS courses (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      code TEXT UNIQUE NOT NULL,
-      timetable TEXT DEFAULT 'Mon & Wed: 10:00 AM - 12:00 PM WAT'
-    );
-    CREATE TABLE IF NOT EXISTS tutors (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      code TEXT UNIQUE NOT NULL,
-      course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL
-    );
-    CREATE TABLE IF NOT EXISTS students (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      code TEXT UNIQUE NOT NULL,
-      course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL,
-      bio TEXT DEFAULT '',
-      phone TEXT DEFAULT ''
-    );
-    CREATE TABLE IF NOT EXISTS magic_links (
-      token TEXT PRIMARY KEY,
-      email TEXT NOT NULL,
-      role TEXT NOT NULL,
-      expires_at TIMESTAMP NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS timetable_requests (
-      id SERIAL PRIMARY KEY,
-      course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-      tutor_name TEXT NOT NULL,
-      proposed_timetable TEXT NOT NULL,
-      status TEXT DEFAULT 'pending'
-    );
-  `);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS courses (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        code TEXT UNIQUE NOT NULL,
+        timetable TEXT DEFAULT 'Mon & Wed: 10:00 AM - 12:00 PM WAT'
+      );
+      CREATE TABLE IF NOT EXISTS tutors (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        code TEXT UNIQUE NOT NULL,
+        course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL
+      );
+      CREATE TABLE IF NOT EXISTS students (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        code TEXT UNIQUE NOT NULL,
+        course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL,
+        bio TEXT DEFAULT '',
+        phone TEXT DEFAULT ''
+      );
+      CREATE TABLE IF NOT EXISTS magic_links (
+        token TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        role TEXT NOT NULL,
+        expires_at TIMESTAMP NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS timetable_requests (
+        id SERIAL PRIMARY KEY,
+        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
+        tutor_name TEXT NOT NULL,
+        proposed_timetable TEXT NOT NULL,
+        status TEXT DEFAULT 'pending'
+      );
+      CREATE TABLE IF NOT EXISTS teacher_applications (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        expertise TEXT NOT NULL,
+        bio TEXT NOT NULL,
+        status TEXT DEFAULT 'pending'
+      );
+      CREATE TABLE IF NOT EXISTS student_applications (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        track TEXT NOT NULL,
+        motivation TEXT NOT NULL,
+        status TEXT DEFAULT 'pending'
+      );
+      CREATE TABLE IF NOT EXISTS course_requests (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        requested_by TEXT NOT NULL,
+        status TEXT DEFAULT 'pending'
+      );
+    `);
+    console.log('Database tables initialized successfully.');
+  } catch (err) {
+    console.error('DB Init Error:', err);
+  }
 }
-initDB().catch(err => console.error('DB Init Error:', err));
+initDB();
 
 async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
   const token = crypto.randomBytes(24).toString('hex');
@@ -96,10 +131,11 @@ async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
       </a>
     </div>
   `;
-  sendEmail(email, `Your QTEI LMS ${role.toUpperCase()} Sign-In Link`, html).catch(() => {});
+  sendEmail(email, `Your QTEI LMS ${role.toUpperCase()} Sign-In Link`, html);
   return link;
 }
 
+// 1. FETCH ALL INITIAL DATA
 app.get('/api/data', async (req, res) => {
   try {
     const courses = await pool.query('SELECT * FROM courses ORDER BY id ASC');
@@ -119,17 +155,7 @@ app.get('/api/data', async (req, res) => {
       WHERE r.status = 'pending' 
       ORDER BY r.id DESC
     `);
-    res.json({
-      courses: courses.rows,
-      tutors: tutors.rows,
-      students: students.rows,
-      timetableRequests: requests.rows
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-const teacherApps = await pool.query("SELECT * FROM teacher_applications WHERE status = 'pending' ORDER BY id DESC");
+    const teacherApps = await pool.query("SELECT * FROM teacher_applications WHERE status = 'pending' ORDER BY id DESC");
     const studentApps = await pool.query("SELECT * FROM student_applications WHERE status = 'pending' ORDER BY id DESC");
     const courseReqs = await pool.query("SELECT * FROM course_requests WHERE status = 'pending' ORDER BY id DESC");
 
@@ -142,88 +168,12 @@ const teacherApps = await pool.query("SELECT * FROM teacher_applications WHERE s
       studentApps: studentApps.rows,
       courseReqs: courseReqs.rows
     });
-
-app.post('/api/courses', async (req, res) => {
-  const { name, timetable } = req.body;
-  if (!name) return res.status(400).json({ error: 'Course name is required' });
-  const code = `CRS-${name.replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
-  try {
-    const result = await pool.query(
-      'INSERT INTO courses (name, code, timetable) VALUES ($1, $2, $3) RETURNING *',
-      [name, code, timetable || 'Mon & Wed: 10:00 AM - 12:00 PM WAT']
-    );
-    res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/tutors', async (req, res) => {
-  const { name, email, courseId } = req.body;
-  if (!name || !email || !courseId) return res.status(400).json({ error: 'Name, email, and course required.' });
-  const code = `TUT-${Math.floor(1000 + Math.random() * 9000)}`;
-  try {
-    const courseRes = await pool.query('SELECT * FROM courses WHERE id = $1', [courseId]);
-    if (courseRes.rows.length === 0) return res.status(404).json({ error: 'Course not found.' });
-
-    const result = await pool.query(
-      'INSERT INTO tutors (name, email, code, course_id) VALUES ($1, $2, $3, $4) RETURNING *',
-      [name, email.toLowerCase(), code, courseId]
-    );
-    createAndEmailMagicLink(email.toLowerCase(), 'tutor').catch(() => {});
-    res.json({ ...result.rows[0], course_name: courseRes.rows[0].name, course_code: courseRes.rows[0].code, tempCode: code });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/students', async (req, res) => {
-  const { name, email, courseId } = req.body;
-  if (!name || !email || !courseId) return res.status(400).json({ error: 'Name, email, and course required.' });
-  const code = `QTEI-${Math.floor(10000 + Math.random() * 90000)}`;
-  try {
-    const courseRes = await pool.query('SELECT * FROM courses WHERE id = $1', [courseId]);
-    if (courseRes.rows.length === 0) return res.status(404).json({ error: 'Course not found.' });
-
-    const result = await pool.query(
-      'INSERT INTO students (name, email, code, course_id) VALUES ($1, $2, $3, $4) RETURNING *',
-      [name, email.toLowerCase(), code, courseId]
-    );
-    res.json({ ...result.rows[0], course_name: courseRes.rows[0].name, course_code: courseRes.rows[0].code });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-// ================= 1. NEW APPLICATION & REQUEST ENDPOINTS =================
-
-// Auto-create application tables in initDB() if not already present
-// (Add these inside your initDB function)
-/*
-    CREATE TABLE IF NOT EXISTS teacher_applications (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      expertise TEXT NOT NULL,
-      bio TEXT NOT NULL,
-      status TEXT DEFAULT 'pending'
-    );
-    CREATE TABLE IF NOT EXISTS student_applications (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      track TEXT NOT NULL,
-      motivation TEXT NOT NULL,
-      status TEXT DEFAULT 'pending'
-    );
-    CREATE TABLE IF NOT EXISTS course_requests (
-      id SERIAL PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT NOT NULL,
-      requested_by TEXT NOT NULL,
-      status TEXT DEFAULT 'pending'
-    );
-*/
-
+// PUBLIC APPLICATION ENDPOINTS
 app.post('/api/apply/teach', async (req, res) => {
   const { name, email, expertise, bio } = req.body;
   if (!name || !email || !expertise) return res.status(400).json({ error: 'Required fields missing.' });
@@ -266,6 +216,60 @@ app.post('/api/request-course', async (req, res) => {
   }
 });
 
+// 2. COURSES & TUTORS & STUDENTS CREATION
+app.post('/api/courses', async (req, res) => {
+  const { name, timetable } = req.body;
+  if (!name) return res.status(400).json({ error: 'Course name is required' });
+  const code = `CRS-${name.replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
+  try {
+    const result = await pool.query(
+      'INSERT INTO courses (name, code, timetable) VALUES ($1, $2, $3) RETURNING *',
+      [name, code, timetable || 'Mon & Wed: 10:00 AM - 12:00 PM WAT']
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/tutors', async (req, res) => {
+  const { name, email, courseId } = req.body;
+  if (!name || !email || !courseId) return res.status(400).json({ error: 'Name, email, and course required.' });
+  const code = `TUT-${Math.floor(1000 + Math.random() * 9000)}`;
+  try {
+    const courseRes = await pool.query('SELECT * FROM courses WHERE id = $1', [courseId]);
+    if (courseRes.rows.length === 0) return res.status(404).json({ error: 'Course not found.' });
+
+    const result = await pool.query(
+      'INSERT INTO tutors (name, email, code, course_id) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, email.toLowerCase(), code, courseId]
+    );
+    createAndEmailMagicLink(email.toLowerCase(), 'tutor');
+    res.json({ ...result.rows[0], course_name: courseRes.rows[0].name, course_code: courseRes.rows[0].code, tempCode: code });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/students', async (req, res) => {
+  const { name, email, courseId } = req.body;
+  if (!name || !email || !courseId) return res.status(400).json({ error: 'Name, email, and course required.' });
+  const code = `QTEI-${Math.floor(10000 + Math.random() * 90000)}`;
+  try {
+    const courseRes = await pool.query('SELECT * FROM courses WHERE id = $1', [courseId]);
+    if (courseRes.rows.length === 0) return res.status(404).json({ error: 'Course not found.' });
+
+    const result = await pool.query(
+      'INSERT INTO students (name, email, code, course_id) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, email.toLowerCase(), code, courseId]
+    );
+    res.json({ ...result.rows[0], course_name: courseRes.rows[0].name, course_code: courseRes.rows[0].code });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. AUTHENTICATION ROUTES
 app.post('/api/auth/request-link', async (req, res) => {
   const { email, role } = req.body;
   if (!role) return res.status(400).json({ error: 'Role is required.' });
