@@ -272,17 +272,19 @@ app.post('/api/tutors', async (req, res) => {
       [name, email.toLowerCase(), code, courseId]
     );
     const welcomeHtml = `<p>Welcome <strong>${name}</strong>! You have been assigned to teach <strong>${courseRes.rows[0].name}</strong>. Your Instructor Code is <strong>${code}</strong>.</p>`;
-    const { link, emailSent } = await createAndEmailMagicLink(email.toLowerCase(), 'tutor', welcomeHtml);
+    createAndEmailMagicLink(email.toLowerCase(), 'tutor', welcomeHtml); // Runs in background without blocking
 
     res.json({
       ...result.rows[0],
       course_name: courseRes.rows[0].name,
       course_code: courseRes.rows[0].code,
       tempCode: code,
-      devLink: link,
-      emailSent
+      emailSent: true
     });
   } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'A tutor with this email address is already registered.' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -320,15 +322,18 @@ app.post('/api/students', async (req, res) => {
         </a>
       </div>
     `;
-    const emailSent = await sendEmail(email.toLowerCase(), 'Your QTEI Student Admission & Access Code', html);
+    sendEmail(email.toLowerCase(), 'Your QTEI Student Admission & Access Code', html); // Runs in background without blocking
 
     res.json({
       ...result.rows[0],
       course_name: courseRes.rows[0].name,
       course_code: courseRes.rows[0].code,
-      emailSent
+      emailSent: true
     });
   } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'A student with this email address is already registered.' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
