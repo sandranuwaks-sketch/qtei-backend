@@ -18,9 +18,11 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
-// Free Nodemailer Transporter via Gmail App Password
+// Nodemailer Transporter via Gmail App Password (Explicit Port 465 SSL)
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
@@ -28,16 +30,22 @@ const transporter = nodemailer.createTransport({
 });
 
 async function sendEmail(to, subject, html) {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) return;
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.warn('⚠️ EMAIL_USER or EMAIL_PASS missing in Render Environment Variables.');
+    return false;
+  }
   try {
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: `"QTEI LMS Portal" <${process.env.EMAIL_USER}>`,
       to,
       subject,
       html
     });
+    console.log('✅ Email sent:', info.messageId);
+    return true;
   } catch (err) {
-    console.log('Email delivery note:', err.message);
+    console.error('❌ Email delivery failed:', err.message);
+    return false;
   }
 }
 
@@ -131,8 +139,8 @@ async function createAndEmailMagicLink(email, role, extraWelcomeHtml = '') {
       </a>
     </div>
   `;
-  sendEmail(email, `Your QTEI LMS ${role.toUpperCase()} Sign-In Link`, html);
-  return link;
+  const emailSent = await sendEmail(email, `Your QTEI LMS ${role.toUpperCase()} Sign-In Link`, html);
+  return { link, emailSent };
 }
 
 // 1. FETCH ALL INITIAL DATA
@@ -182,6 +190,11 @@ app.post('/api/apply/teach', async (req, res) => {
       'INSERT INTO teacher_applications (name, email, expertise, bio) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, email.toLowerCase(), expertise, bio || '']
     );
+    await sendEmail(
+      email.toLowerCase(),
+      'QTEI Instructor Application Received',
+      `<p>Hi ${name},</p><p>Thank you for applying to teach <strong>${expertise}</strong> with QTEI. Our team will review your application shortly.</p>`
+    );
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -195,6 +208,11 @@ app.post('/api/apply/learn', async (req, res) => {
     const result = await pool.query(
       'INSERT INTO student_applications (name, email, track, motivation) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, email.toLowerCase(), track, motivation || '']
+    );
+    await sendEmail(
+      email.toLowerCase(),
+      'QTEI Cohort Application Received',
+      `<p>Hi ${name},</p><p>We have received your application for the <strong>${track}</strong> track at QTEI. You will receive your admission code once approved.</p>`
     );
     res.json(result.rows[0]);
   } catch (err) {
@@ -216,7 +234,7 @@ app.post('/api/request-course', async (req, res) => {
   }
 });
 
-// 2. COURSES & TUTORS & STUDENTS CREATION
+// 2. COURSES, TUTORS & STUDENTS CREATION + DELETE
 app.post('/api/courses', async (req, res) => {
   const { name, timetable } = req.body;
   if (!name) return res.status(400).json({ error: 'Course name is required' });
@@ -227,6 +245,15 @@ app.post('/api/courses', async (req, res) => {
       [name, code, timetable || 'Mon & Wed: 10:00 AM - 12:00 PM WAT']
     );
     res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/courses/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM courses WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Course deleted.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -244,8 +271,26 @@ app.post('/api/tutors', async (req, res) => {
       'INSERT INTO tutors (name, email, code, course_id) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, email.toLowerCase(), code, courseId]
     );
-    createAndEmailMagicLink(email.toLowerCase(), 'tutor');
-    res.json({ ...result.rows[0], course_name: courseRes.rows[0].name, course_code: courseRes.rows[0].code, tempCode: code });
+    const welcomeHtml = `<p>Welcome <strong>${name}</strong>! You have been assigned to teach <strong>${courseRes.rows[0].name}</strong>. Your Instructor Code is <strong>${code}</strong>.</p>`;
+    const { link, emailSent } = await createAndEmailMagicLink(email.toLowerCase(), 'tutor', welcomeHtml);
+
+    res.json({
+      ...result.rows[0],
+      course_name: courseRes.rows[0].name,
+      course_code: courseRes.rows[0].code,
+      tempCode: code,
+      devLink: link,
+      emailSent
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/tutors/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM tutors WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Tutor removed.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -263,7 +308,35 @@ app.post('/api/students', async (req, res) => {
       'INSERT INTO students (name, email, code, course_id) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, email.toLowerCase(), code, courseId]
     );
-    res.json({ ...result.rows[0], course_name: courseRes.rows[0].name, course_code: courseRes.rows[0].code });
+
+    const html = `
+      <div style="font-family: sans-serif; max-width: 520px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
+        <h2 style="color: #4f46e5;">Welcome to QTEI LMS!</h2>
+        <p>Hi <strong>${name}</strong>,</p>
+        <p>You have been admitted to <strong>${courseRes.rows[0].name}</strong>.</p>
+        <p>Your Student Access Code is: <strong style="font-size: 18px; color: #059669;">${code}</strong></p>
+        <a href="${FRONTEND_URL}" style="display: inline-block; background: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 16px 0;">
+          Access Student Portal
+        </a>
+      </div>
+    `;
+    const emailSent = await sendEmail(email.toLowerCase(), 'Your QTEI Student Admission & Access Code', html);
+
+    res.json({
+      ...result.rows[0],
+      course_name: courseRes.rows[0].name,
+      course_code: courseRes.rows[0].code,
+      emailSent
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/students/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM students WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Student removed.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -276,8 +349,12 @@ app.post('/api/auth/request-link', async (req, res) => {
   try {
     if (role === 'admin') return res.json({ user: { role: 'admin', email: ADMIN_EMAIL } });
     const cleanEmail = (email || '').trim().toLowerCase();
-    const devLink = await createAndEmailMagicLink(cleanEmail, role);
-    res.json({ message: 'Magic link generated successfully!', devLink });
+    const { link, emailSent } = await createAndEmailMagicLink(cleanEmail, role);
+    res.json({
+      message: emailSent ? 'Magic link emailed and generated!' : 'Magic link generated (check Render SMTP logs if email delayed).',
+      devLink: link,
+      emailSent
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
