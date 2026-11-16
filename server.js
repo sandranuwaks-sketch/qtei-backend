@@ -272,7 +272,7 @@ app.post('/api/tutors', async (req, res) => {
       [name, email.toLowerCase(), code, courseId]
     );
     const welcomeHtml = `<p>Welcome <strong>${name}</strong>! You have been assigned to teach <strong>${courseRes.rows[0].name}</strong>. Your Instructor Code is <strong>${code}</strong>.</p>`;
-    createAndEmailMagicLink(email.toLowerCase(), 'tutor', welcomeHtml); // Runs in background without blocking
+    createAndEmailMagicLink(email.toLowerCase(), 'tutor', welcomeHtml);
 
     res.json({
       ...result.rows[0],
@@ -322,7 +322,7 @@ app.post('/api/students', async (req, res) => {
         </a>
       </div>
     `;
-    sendEmail(email.toLowerCase(), 'Your QTEI Student Admission & Access Code', html); // Runs in background without blocking
+    sendEmail(email.toLowerCase(), 'Your QTEI Student Admission & Access Code', html);
 
     res.json({
       ...result.rows[0],
