@@ -356,7 +356,7 @@ app.post('/api/auth/request-link', async (req, res) => {
     const cleanEmail = (email || '').trim().toLowerCase();
     const { link, emailSent } = await createAndEmailMagicLink(cleanEmail, role);
     res.json({
-      message: emailSent ? 'Magic link emailed and generated!' : 'Magic link generated (check Render SMTP logs if email delayed).',
+      message: emailSent ? 'Magic link emailed and generated!' : 'Magic link generated.',
       devLink: link,
       emailSent
     });
