@@ -434,20 +434,6 @@ app.post('/api/timetable/approve/:requestId', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// TEMPORARY WIPE ROUTE (Delete after use)
-app.get('/api/wipe-db', async (req, res) => {
-  try {
-    await pool.query('DELETE FROM students;');
-    await pool.query('DELETE FROM tutors;');
-    await pool.query('DELETE FROM student_applications;');
-    await pool.query('DELETE FROM teacher_applications;');
-    await pool.query('DELETE FROM magic_links;');
-    await pool.query('DELETE FROM timetable_requests;');
-    res.json({ message: 'Database successfully wiped clean of all students and tutors!' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));
